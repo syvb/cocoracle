@@ -71,9 +71,10 @@ class CoconutGPT2(nn.Module):
         inputs_embeds = hidden_state.unsqueeze(1) + pos_emb.unsqueeze(0)  # (B, 1, D)
 
         # Build attention mask: attend to all past + this position
+        B = hidden_state.size(0)
         past_len = past_key_values[0][0].size(2) if past_key_values else 0
         total_len = past_len + 1
-        attn_mask = torch.ones(1, total_len, device=hidden_state.device)
+        attn_mask = torch.ones(B, total_len, device=hidden_state.device)
 
         outputs = self.model.transformer(
             inputs_embeds=inputs_embeds,
@@ -112,9 +113,10 @@ class CoconutGPT2(nn.Module):
         pos_emb = self.model.transformer.wpe(positions)
         inputs_embeds = tok_emb + pos_emb
 
+        B = answer_ids.size(0)
         past_len = past_key_values[0][0].size(2) if past_key_values else 0
         total_len = past_len + answer_ids.size(1)
-        attn_mask = torch.ones(1, total_len, device=answer_ids.device)
+        attn_mask = torch.ones(B, total_len, device=answer_ids.device)
 
         outputs = self.model.transformer(
             inputs_embeds=inputs_embeds,

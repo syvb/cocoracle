@@ -123,15 +123,24 @@ def train_stage(model, train_data, val_data, tokenizer, stage_config, prev_ckpt=
     print(f"Training {name} | epochs={epochs} | lr={lr} | latent={num_latent}")
     print(f"{'='*60}")
 
+    is_latent = num_latent != 0
+
     if prev_ckpt and os.path.exists(prev_ckpt):
         print(f"Loading checkpoint: {prev_ckpt}")
         model.load_state_dict(torch.load(prev_ckpt, map_location=DEVICE))
 
+    # For latent stages, use batch_size=1 with larger grad accum
+    effective_batch = BATCH_SIZE if not is_latent else 1
+    effective_accum = GRAD_ACCUM if not is_latent else BATCH_SIZE
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
 
     n_train = len(train_data["problems"])
-    steps_per_epoch = n_train // BATCH_SIZE
-    total_steps = steps_per_epoch * epochs // GRAD_ACCUM
+    # For latent stages, use fewer examples per epoch since B=1 is slower
+    if is_latent:
+        n_train = min(n_train, 20000)
+    steps_per_epoch = n_train // effective_batch
+    total_steps = steps_per_epoch * epochs // effective_accum
     warmup_steps = int(total_steps * 0.05)
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
@@ -146,11 +155,11 @@ def train_stage(model, train_data, val_data, tokenizer, stage_config, prev_ckpt=
         epoch_loss = 0
         epoch_steps = 0
 
-        pbar = tqdm(range(0, n_train - BATCH_SIZE + 1, BATCH_SIZE),
+        pbar = tqdm(range(0, n_train - effective_batch + 1, effective_batch),
                     desc=f"{name} epoch {epoch+1}/{epochs}")
 
         for batch_start in pbar:
-            idx = perm[batch_start:batch_start + BATCH_SIZE]
+            idx = perm[batch_start:batch_start + effective_batch]
             batch_problems = [train_data["problems"][i] for i in idx]
             batch_cot = [train_data["cot_steps"][i] for i in idx]
             batch_answers = [train_data["answers"][i] for i in idx]
@@ -162,48 +171,55 @@ def train_stage(model, train_data, val_data, tokenizer, stage_config, prev_ckpt=
 
             if batch["mode"] == "text":
                 loss, _ = model.forward_text_only(batch["input_ids"], batch["labels"])
+                loss = loss / effective_accum
+                loss.backward()
+                epoch_loss += loss.item() * effective_accum
             else:
-                # Latent mode: we need to handle variable latent counts
-                # For simplicity, use the max latent count in the batch
-                max_latent = max(batch["latent_counts"])
+                # Latent mode: single example (B=1), no padding issues
+                n_lat = batch["latent_counts"][0]
+                prefix_ids = batch["prefix_ids"][:1]  # already (1, L)
+                answer_ids = batch["answer_ids"][:1]
 
-                result = model.forward_coconut(
-                    batch["prefix_ids"], max_latent, batch["answer_ids"]
-                )
+                # Trim padding from prefix and answer
+                pmask = batch["prefix_mask"][0]
+                plen = int(pmask.sum().item())
+                prefix_ids = prefix_ids[:, :plen]
 
-                # Answer loss
-                logits = result["answer_logits"]  # (B, L_answer, V)
-                targets = batch["answer_ids"][:, 1:]  # shift by 1
-                logits = logits[:, :-1, :]  # align
+                amask = batch["answer_mask"][0]
+                alen = int(amask.sum().item())
+                answer_ids = answer_ids[:, :alen]
 
-                # Mask padding
-                mask = batch["answer_mask"][:, 1:]  # shift
+                result = model.forward_coconut(prefix_ids, n_lat, answer_ids)
+
+                logits = result["answer_logits"]  # (1, L_answer, V)
+                targets = answer_ids[:, 1:]
+                logits = logits[:, :-1, :]
+
                 loss = F.cross_entropy(
                     logits.reshape(-1, logits.size(-1)),
                     targets.reshape(-1),
-                    ignore_index=tokenizer.pad_token_id,
-                    reduction="none"
+                    reduction="mean"
                 )
-                loss = (loss * mask.reshape(-1)).sum() / mask.sum().clamp(min=1)
 
-                # Norm regularization on thought hidden states
                 if result["thought_norms"]:
                     norm_loss = sum(result["thought_norms"]) / len(result["thought_norms"])
                     loss = loss + NORM_REG * norm_loss
 
-            loss = loss / GRAD_ACCUM
-            loss.backward()
+                loss = loss / effective_accum
+                loss.backward()
+                epoch_loss += loss.item() * effective_accum
 
-            if (epoch_steps + 1) % GRAD_ACCUM == 0:
+            epoch_steps += 1
+
+            if epoch_steps % effective_accum == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
 
-            epoch_loss += loss.item() * GRAD_ACCUM
-            epoch_steps += 1
-            pbar.set_postfix(loss=f"{loss.item() * GRAD_ACCUM:.4f}", lr=f"{scheduler.get_last_lr()[0]:.2e}")
+            if epoch_steps % 100 == 0:
+                pbar.set_postfix(loss=f"{epoch_loss/epoch_steps:.4f}", lr=f"{scheduler.get_last_lr()[0]:.2e}")
 
         avg_loss = epoch_loss / max(epoch_steps, 1)
         print(f"Epoch {epoch+1} avg loss: {avg_loss:.4f}")
@@ -236,60 +252,49 @@ def evaluate_model(model, data, tokenizer, num_latent, max_samples=500):
     total = 0
     n = min(len(data["problems"]), max_samples)
 
-    for i in range(0, n, BATCH_SIZE):
-        end = min(i + BATCH_SIZE, n)
-        batch_problems = data["problems"][i:end]
-        batch_cot = data["cot_steps"][i:end]
-        batch_answers = data["answers"][i:end]
+    for i in range(n):
+        prob = data["problems"][i]
+        cot = data["cot_steps"][i]
+        ans_gold = data["answers"][i]
 
-        batch = prepare_curriculum_batch(
-            batch_problems, batch_cot, batch_answers,
-            tokenizer, num_latent, DEVICE
-        )
-
-        if batch["mode"] == "text":
+        if num_latent == 0:
+            # Text mode: batch of 1
+            batch = prepare_curriculum_batch([prob], [cot], [ans_gold], tokenizer, 0, DEVICE)
             loss, logits = model.forward_text_only(batch["input_ids"], batch["labels"])
-            total_loss += loss.item() * (end - i)
+            total_loss += loss.item()
         else:
-            max_latent = max(batch["latent_counts"])
-            result = model.forward_coconut(
-                batch["prefix_ids"], max_latent, batch["answer_ids"]
-            )
+            batch = prepare_curriculum_batch([prob], [cot], [ans_gold], tokenizer, num_latent, DEVICE)
+            n_lat = batch["latent_counts"][0]
+            pmask = batch["prefix_mask"][0]
+            plen = int(pmask.sum().item())
+            prefix_ids = batch["prefix_ids"][:1, :plen]
+            amask = batch["answer_mask"][0]
+            alen = int(amask.sum().item())
+            answer_ids = batch["answer_ids"][:1, :alen]
+
+            result = model.forward_coconut(prefix_ids, n_lat, answer_ids)
             logits = result["answer_logits"]
-            targets = batch["answer_ids"][:, 1:]
+            targets = answer_ids[:, 1:]
             logits_shifted = logits[:, :-1, :]
-            mask = batch["answer_mask"][:, 1:]
             loss = F.cross_entropy(
                 logits_shifted.reshape(-1, logits_shifted.size(-1)),
                 targets.reshape(-1),
-                ignore_index=tokenizer.pad_token_id,
-                reduction="none"
+                reduction="mean"
             )
-            total_loss += (loss * mask.reshape(-1)).sum().item() / mask.sum().clamp(min=1).item() * (end - i)
+            total_loss += loss.item()
 
-        # Check exact match accuracy on answer (greedy decode)
-        for j in range(end - i):
-            prob = batch_problems[j]
-            ans_gold = batch_answers[j]
-
-            if num_latent == 0:
-                # For text mode, accuracy check is trickier; skip
-                continue
-
-            # Quick greedy check: use the logits we already have
-            if batch["mode"] == "latent" and result["answer_logits"] is not None:
-                pred_ids = result["answer_logits"][j].argmax(dim=-1)
-                # The answer starts after <eot>, get tokens until pad
-                pred_tokens = []
-                for tid in pred_ids:
-                    t = tid.item()
-                    if t == tokenizer.pad_token_id or t == tokenizer.eos_token_id:
-                        break
-                    pred_tokens.append(t)
-                pred_text = tokenizer.decode(pred_tokens).strip()
-                if pred_text == ans_gold:
-                    correct += 1
-                total += 1
+            # Greedy accuracy check
+            pred_ids = logits_shifted[0].argmax(dim=-1)
+            pred_tokens = []
+            for tid in pred_ids:
+                t = tid.item()
+                if t == tokenizer.pad_token_id or t == tokenizer.eos_token_id:
+                    break
+                pred_tokens.append(t)
+            pred_text = tokenizer.decode(pred_tokens).strip()
+            if pred_text == ans_gold:
+                correct += 1
+            total += 1
 
     avg_loss = total_loss / max(n, 1)
     accuracy = correct / max(total, 1) if total > 0 else 0.0
@@ -298,6 +303,11 @@ def evaluate_model(model, data, tokenizer, num_latent, max_samples=500):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start-stage", type=int, default=0, help="Stage to start from (0-3)")
+    args = parser.parse_args()
+
     print("Loading tokenizer and data...")
     tokenizer = make_tokenizer()
     train_data = torch.load(os.path.join(DATA_DIR, "train.pt"), weights_only=False)
@@ -313,7 +323,15 @@ def main():
     all_logs = []
     prev_ckpt = None
 
-    for stage_config in STAGE_CONFIGS:
+    # If resuming, find the checkpoint from the previous stage
+    if args.start_stage > 0:
+        prev_stage = STAGE_CONFIGS[args.start_stage - 1]
+        prev_ckpt = os.path.join(CKPT_DIR, f"{prev_stage['name']}.pt")
+        if not os.path.exists(prev_ckpt):
+            print(f"WARNING: Previous checkpoint {prev_ckpt} not found!")
+            prev_ckpt = None
+
+    for stage_config in STAGE_CONFIGS[args.start_stage:]:
         ckpt_path, logs = train_stage(
             model, train_data, val_data, tokenizer, stage_config, prev_ckpt
         )
