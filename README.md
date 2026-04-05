@@ -47,7 +47,9 @@ CoT: 7+5=12 write 2 carry 1 | 4+8+1=13 write 3 carry 1 | 3+2+1=6 write 6
 Answer: 632
 ```
 
-Stage 0 trains with full text CoT, then stages 1-3 progressively replace CoT steps with latent continuous thought vectors (hidden states fed back as inputs instead of decoded to text). Stage 1 (last step latent) achieves 69% teacher-forced accuracy.
+Stage 0 trains with full text CoT, then stages 1-3 progressively replace CoT steps with latent continuous thought vectors (hidden states fed back as inputs instead of decoded to text).
+
+**Important caveat:** Our Coconut model is not very good. Stage 1 (only the last step latent) achieves 69% teacher-forced accuracy, which is reasonable. But the model degrades sharply as more steps become latent: Stage 2 drops to 19%, and Stage 3 (full replacement, all steps latent) manages only 2.4%. This means the all-latent model barely works, and even Stage 1 is far from reliable. A proper Coconut implementation would need significantly more training, larger models, and the full curriculum from the original paper. Our AO results are therefore probing activations from a weak reasoner — a stronger Coconut model would likely produce richer, more interpretable latent states.
 
 ### 2. Activation Collection
 
