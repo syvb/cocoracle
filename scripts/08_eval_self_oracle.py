@@ -230,7 +230,7 @@ def main():
     tokenizer = make_tokenizer()
 
     print("Loading self-oracle...")
-    model = SelfOracle(tokenizer, device=DEVICE)
+    model = SelfOracle(tokenizer, device=DEVICE, injection_layer=5, injection_scale=2.0)
 
     ckpt = os.path.join(CKPT_DIR, "self_oracle_best.pt")
     if not os.path.exists(ckpt):

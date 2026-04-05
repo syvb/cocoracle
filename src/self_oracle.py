@@ -14,11 +14,11 @@ from src.data_gen import ACT
 class SelfOracle(nn.Module):
     """Coconut model that also serves as its own activation oracle.
 
-    Uses the same injection mechanism as the AO paper (norm-matched addition),
-    but applied to the model that produced the activations in the first place.
+    Uses norm-matched activation injection, applied to the model that
+    produced the activations in the first place (self-interpretation).
     """
 
-    def __init__(self, tokenizer, device="cuda", injection_layer=1):
+    def __init__(self, tokenizer, device="cuda", injection_layer=1, injection_scale=2.0):
         super().__init__()
         self.device = device
         self.tokenizer = tokenizer
@@ -30,6 +30,7 @@ class SelfOracle(nn.Module):
 
         self.d_model = self.model.config.n_embd  # 768
         self.injection_layer = injection_layer
+        self.injection_scale = injection_scale
 
         # Injection state
         self._injection_vectors = None
@@ -65,7 +66,7 @@ class SelfOracle(nn.Module):
 
             h_norm = h_i.norm(dim=-1, keepdim=True).clamp(min=1e-8)
             v_norm = v_i.norm().clamp(min=1e-8)
-            delta[:, pos, :] = h_norm * (v_i / v_norm)
+            delta[:, pos, :] = self.injection_scale * h_norm * (v_i / v_norm)
 
         return (hidden_states + delta,) + output[1:]
 

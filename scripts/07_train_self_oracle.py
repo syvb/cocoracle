@@ -129,7 +129,7 @@ def train_ao_step(model, item, tokenizer):
     target = item["target"]
     vecs = item["vectors"]
 
-    full_text = prompt + " " + target
+    full_text = prompt + " " + target + tokenizer.eos_token
     encoded = tokenizer.encode(full_text, add_special_tokens=False)
     if len(encoded) > MAX_SEQ_LEN:
         encoded = encoded[:MAX_SEQ_LEN]
@@ -261,7 +261,7 @@ def main():
     print(f"Per epoch: {n_ao_per_epoch} AO + {n_text_per_epoch} text = {total_per_epoch}")
 
     print("Initializing self-oracle from Coconut checkpoint...")
-    model = SelfOracle(tokenizer, device=DEVICE)
+    model = SelfOracle(tokenizer, device=DEVICE, injection_layer=5)
 
     # Load the Coconut Stage 1 checkpoint
     coconut_ckpt = os.path.join(CKPT_DIR, "stage1_last_latent.pt")
