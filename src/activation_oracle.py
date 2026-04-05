@@ -120,17 +120,16 @@ class ActivationOracle(nn.Module):
         if not positions_in_range:
             return output
 
-        hidden_states = hidden_states.clone()
+        delta = torch.zeros_like(hidden_states)
         for i, pos in positions_in_range:
-            h_i = hidden_states[:, pos, :]  # (B, D)
-            v_i = self._injection_vectors[i].to(h_i.device)  # (D,)
+            h_i = hidden_states[:, pos, :]
+            v_i = self._injection_vectors[i].to(h_i.device)
 
-            # Norm-matched addition: h' = h + ||h|| * v / ||v||
-            h_norm = h_i.norm(dim=-1, keepdim=True).clamp(min=1e-8)  # (B, 1)
+            h_norm = h_i.norm(dim=-1, keepdim=True).clamp(min=1e-8)
             v_norm = v_i.norm().clamp(min=1e-8)
-            hidden_states[:, pos, :] = h_i + h_norm * (v_i / v_norm)
+            delta[:, pos, :] = h_norm * (v_i / v_norm)
 
-        return (hidden_states,) + output[1:]
+        return (hidden_states + delta,) + output[1:]
 
     def set_injection(self, vectors, positions):
         """Set activation vectors and positions for injection.

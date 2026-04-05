@@ -1,0 +1,12 @@
+{
+  "cot_exact_match": 0.0,
+  "cot_token_f1": 0.3248311227987698,
+  "answer_exact_match": 0.0,
+  "context_f1": 0.1763698967698975,
+  "by_layer": {
+    "3": 0.0,
+    "6": 0.0,
+    "9": 0.0
+  },
+  "random_baseline": 0.0
+}

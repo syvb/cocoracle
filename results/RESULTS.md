@@ -76,14 +76,54 @@ The AO (GPT-2-small + LoRA, 4.7M trainable params) with norm-matched injection a
 
 4. **Promising direction**: If scaled to larger models (e.g., Llama-7B as both Coconut and Oracle), this approach could enable interpreting what a model is "thinking" during continuous reasoning — a capability not possible with standard interpretability tools.
 
+## Self-Oracle: Using the Coconut Model as its Own AO
+
+The separate-model AO collapsed because GPT-2-small lacked capacity to learn both arithmetic and activation interpretation from scratch. We hypothesized that using the **Coconut model itself** as the oracle — since it already understands arithmetic and its own internal representations — would work better.
+
+### Approach
+- Start from Stage 1 Coconut checkpoint (69% teacher-forced accuracy)
+- Full fine-tune (all 124M params, no LoRA) on mixed objective:
+  - 70% AO tasks (CoT recovery, answer prediction, context prediction)
+  - 30% original text-CoT data (to prevent catastrophic forgetting)
+- Norm-matched injection after layer 1 (same mechanism)
+- 5 epochs, lr=5e-6
+
+### Results
+
+| Metric | Self-Oracle | Separate AO | Linear Probes |
+|--------|-------------|-------------|---------------|
+| **CoT token F1** | **32.5%** | 26.4% | N/A |
+| CoT exact match | 0% | 0% | 100%* |
+| Answer exact match | 0% | 0% | 41.9% |
+| Random baseline | 0% | 0% | N/A |
+| Text loss (forgetting) | 0.205 (stable) | N/A | N/A |
+
+\* Probes measure first-token accuracy from a single linear layer, not full text generation.
+
+### Key improvements over separate AO
+1. **No mode collapse**: The self-oracle produces varied, arithmetic-flavored outputs that differ based on the input activation (the separate AO collapsed to a single repeated output).
+2. **Higher token F1**: 32.5% vs 26.4% — a 23% relative improvement.
+3. **No catastrophic forgetting**: Text loss stayed stable at 0.205 across all 5 epochs, confirming the mixed training objective works.
+4. **AO loss still improving**: Val AO loss decreased every epoch (2.03 → 1.98), suggesting more training would continue to help.
+
+### Analysis
+The self-oracle generates text like `"8+1=9 write 9  carry 1 write 1  9993..."` — the beginning contains real arithmetic operations before degenerating. This is qualitatively different from the separate AO's total mode collapse. The model is clearly using the injected activations to condition its output, but GPT-2-small still lacks the capacity to precisely decode the activation into the exact correct CoT step.
+
+### What would get this to work fully
+1. **Model scale**: GPT-2-XL (1.5B) or Qwen-1.5B would likely cross the threshold. The AO paper's smallest successful model is 8B, but with the self-oracle advantage + narrow domain, 1.5B should suffice.
+2. **More training**: AO loss was still decreasing at epoch 5 — training for 20+ epochs could help.
+3. **Better stopping**: The model doesn't know when to stop generating. Adding EOS tokens to training targets would fix the "too much output" problem.
+
 ## Reproduction
 
 ```bash
 pip install -r requirements.txt
-bash scripts/run_all.sh  # ~3 hours on RTX 4090
+bash scripts/run_all.sh  # ~3 hours on RTX 4090 (base experiment)
+python scripts/07_train_self_oracle.py  # ~1.5 hours additional
+python scripts/08_eval_self_oracle.py   # ~20 minutes
 ```
 
 ## Hardware
 
 - GPU: NVIDIA RTX 4090 (24GB)
-- Total runtime: ~3.5 hours
+- Total runtime: ~5 hours
