@@ -64,11 +64,8 @@ class CoconutGPT2(nn.Module):
             new_past: updated KV cache
             all_hidden: dict mapping layer_idx -> (B, D) hidden state at that layer
         """
-        # Input = previous hidden state + positional embedding
-        pos_emb = self.model.transformer.wpe(
-            torch.tensor([position_id], device=hidden_state.device)
-        )  # (1, D)
-        inputs_embeds = hidden_state.unsqueeze(1) + pos_emb.unsqueeze(0)  # (B, 1, D)
+        # Input = previous hidden state (position embedding added internally by GPT-2)
+        inputs_embeds = hidden_state.unsqueeze(1)  # (B, 1, D)
 
         # Build attention mask: attend to all past + this position
         B = hidden_state.size(0)
@@ -105,13 +102,8 @@ class CoconutGPT2(nn.Module):
         Returns:
             logits: (B, L_answer, V) logits for answer tokens
         """
-        positions = torch.arange(
-            start_position, start_position + answer_ids.size(1),
-            device=answer_ids.device
-        )
-        tok_emb = self.model.transformer.wte(answer_ids)
-        pos_emb = self.model.transformer.wpe(positions)
-        inputs_embeds = tok_emb + pos_emb
+        # Token embeddings only (position embedding added internally by GPT-2)
+        inputs_embeds = self.model.transformer.wte(answer_ids)
 
         B = answer_ids.size(0)
         past_len = past_key_values[0][0].size(2) if past_key_values else 0
@@ -211,10 +203,8 @@ class CoconutGPT2(nn.Module):
         generated = []
 
         for i in range(max_new_tokens):
-            pos = torch.tensor([next_pos + i], device=prefix_ids.device)
-            tok_emb = self.model.transformer.wte(curr_id)
-            pos_emb = self.model.transformer.wpe(pos)
-            inputs_embeds = tok_emb + pos_emb
+            # Token embedding only (position embedding added by GPT-2 from KV cache length)
+            inputs_embeds = self.model.transformer.wte(curr_id)
 
             past_len = past_kv[0][0].size(2)
             attn_mask = torch.ones(1, past_len + 1, device=prefix_ids.device)
@@ -229,10 +219,34 @@ class CoconutGPT2(nn.Module):
             logits = self.model.lm_head(out.last_hidden_state[:, -1, :])
             next_token = logits.argmax(dim=-1)
 
-            if next_token.item() == self.tokenizer.eos_token_id:
+            tok_id = next_token.item()
+            if tok_id == self.tokenizer.eos_token_id:
                 break
 
-            generated.append(next_token.item())
+            # Stop on special tokens
+            if tok_id in (self.bot_id, self.sep_id, self.eot_id, self.act_id):
+                break
+
+            generated.append(tok_id)
+
+            # Stop once we've decoded a complete number (check every token)
+            # GPT-2 often encodes numbers as single multi-digit tokens
+            full_text = self.tokenizer.decode(generated).strip()
+            # If we have at least 1 char and the text starts looking non-numeric, stop
+            if len(full_text) >= 2 and not all(c.isdigit() for c in full_text):
+                # Keep only the leading numeric part
+                num_part = ""
+                for c in full_text:
+                    if c.isdigit():
+                        num_part += c
+                    else:
+                        break
+                if num_part:
+                    generated = self.tokenizer.encode(num_part, add_special_tokens=False)
+                else:
+                    generated = []
+                break
+
             curr_id = next_token.unsqueeze(0)
 
         return generated, result["thought_hiddens"], result["layer_hiddens"]

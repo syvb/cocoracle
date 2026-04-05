@@ -65,9 +65,9 @@ def simple_bleu(pred, gold, max_n=4):
     return brevity * score / max_n
 
 
-def evaluate_coconut_accuracy(model, data, tokenizer, split_name, max_samples=1000):
+def evaluate_coconut_accuracy(model, data, tokenizer, split_name, num_latent_mode=1, max_samples=1000):
     """Evaluate Coconut model accuracy on a dataset."""
-    print(f"\n--- Coconut Accuracy ({split_name}) ---")
+    print(f"\n--- Coconut Accuracy ({split_name}, latent={num_latent_mode}) ---")
     model.eval()
     n = min(len(data["problems"]), max_samples)
 
@@ -75,15 +75,25 @@ def evaluate_coconut_accuracy(model, data, tokenizer, split_name, max_samples=10
     total = 0
     by_num_steps = defaultdict(lambda: {"correct": 0, "total": 0})
 
+    from src.data_gen import SEP
     for i in tqdm(range(n), desc=f"Coconut {split_name}"):
         problem = data["problems"][i]
         answer = data["answers"][i]
-        num_steps = len(data["cot_steps"][i])
+        cot_steps = data["cot_steps"][i]
+        num_steps = len(cot_steps)
+
+        if num_latent_mode == "all":
+            n_latent = num_steps
+        else:
+            n_latent = min(num_latent_mode, num_steps)
+        n_text = num_steps - n_latent
 
         prefix = f"{problem} {BOT}"
+        for j in range(n_text):
+            prefix += f" {cot_steps[j]} {SEP}"
         prefix_ids = tokenizer.encode(prefix, return_tensors="pt").to(DEVICE)
 
-        generated, _, _ = model.generate_answer(prefix_ids, num_steps, max_new_tokens=20)
+        generated, _, _ = model.generate_answer(prefix_ids, n_latent, max_new_tokens=20)
         pred = tokenizer.decode(generated).strip()
 
         is_correct = pred == answer
@@ -119,8 +129,8 @@ def evaluate_ao(oracle, activation_data, tokenizer, split_name, max_samples=2000
 
     for i in tqdm(range(n), desc=f"AO {split_name}"):
         item = activation_data[i]
-        cot_steps = item["cot_steps"]
-        num_steps = item["num_steps"]
+        cot_steps = item.get("latent_cot_steps", item["cot_steps"])
+        num_steps = item.get("num_latent", item["num_steps"])
         answer = item["answer"]
         problem = item["problem"]
         layer_hiddens = item["layer_hiddens"]
@@ -243,11 +253,13 @@ def evaluate_random_baseline(oracle, activation_data, tokenizer, max_samples=500
 
     for i in tqdm(range(n), desc="Random baseline"):
         item = activation_data[i]
-        if not item["layer_hiddens"] or item["num_steps"] == 0:
+        latent_cot = item.get("latent_cot_steps", item["cot_steps"])
+        num_lat = item.get("num_latent", item["num_steps"])
+        if not item["layer_hiddens"] or num_lat == 0:
             continue
 
         step_idx = 0
-        gold = item["cot_steps"][step_idx]
+        gold = latent_cot[step_idx] if step_idx < len(latent_cot) else ""
         src_layer = 6
 
         # Random vector with same shape and similar norm
@@ -283,23 +295,29 @@ def qualitative_examples(coconut, oracle, data, tokenizer, n=20):
 
     indices = random.sample(range(len(data["problems"])), min(n, len(data["problems"])))
 
+    from src.data_gen import SEP
     for i in indices:
         problem = data["problems"][i]
         answer = data["answers"][i]
         cot_steps = data["cot_steps"][i]
         num_steps = len(cot_steps)
+        n_latent = 1  # Stage 1
+        n_text = num_steps - n_latent
 
-        # Run Coconut
+        # Run Coconut with Stage 1 setup
         prefix = f"{problem} {BOT}"
+        for j in range(n_text):
+            prefix += f" {cot_steps[j]} {SEP}"
         prefix_ids = tokenizer.encode(prefix, return_tensors="pt").to(DEVICE)
         generated, thought_hiddens, layer_hiddens = coconut.generate_answer(
-            prefix_ids, num_steps, max_new_tokens=20
+            prefix_ids, n_latent, max_new_tokens=20
         )
         pred_answer = tokenizer.decode(generated).strip()
 
-        # Ask AO about each thought step
+        # Ask AO about each latent thought step
+        latent_cot = cot_steps[n_text:]  # ground truth for latent steps
         ao_interpretations = []
-        for step_idx in range(num_steps):
+        for step_idx in range(n_latent):
             if not layer_hiddens or step_idx >= len(layer_hiddens):
                 ao_interpretations.append("[no hidden state]")
                 continue
@@ -324,19 +342,20 @@ def qualitative_examples(coconut, oracle, data, tokenizer, n=20):
             "gold_answer": answer,
             "pred_answer": pred_answer,
             "correct": pred_answer == answer,
-            "gold_cot": cot_steps,
+            "text_cot": cot_steps[:n_text],
+            "latent_cot_gold": latent_cot,
             "ao_interpretations": ao_interpretations,
         }
         examples.append(ex)
 
-        # Print
         print(f"\nProblem: {problem}")
         print(f"Gold answer: {answer} | Predicted: {pred_answer} {'✓' if ex['correct'] else '✗'}")
-        for s in range(num_steps):
-            gold_step = cot_steps[s] if s < len(cot_steps) else "?"
+        print(f"Text CoT: {cot_steps[:n_text]}")
+        for s in range(n_latent):
+            gold_step = latent_cot[s] if s < len(latent_cot) else "?"
             ao_step = ao_interpretations[s] if s < len(ao_interpretations) else "?"
             match = "✓" if gold_step == ao_step else "✗"
-            print(f"  Step {s+1}: gold=[{gold_step}] ao=[{ao_step}] {match}")
+            print(f"  Latent step {s+1}: gold=[{gold_step}] ao=[{ao_step}] {match}")
 
     return examples
 
@@ -348,15 +367,9 @@ def main():
     print("Loading tokenizer and models...")
     tokenizer = make_tokenizer()
 
-    # Load Coconut model
+    # Load Coconut model — use Stage 1 (best latent stage)
     coconut = CoconutGPT2(tokenizer, device=DEVICE).to(DEVICE)
-    ckpt = os.path.join(CKPT_DIR, "stage3_all_latent.pt")
-    if not os.path.exists(ckpt):
-        for stage in ["stage2_last2_latent", "stage1_last_latent", "stage0_text_cot"]:
-            p = os.path.join(CKPT_DIR, f"{stage}.pt")
-            if os.path.exists(p):
-                ckpt = p
-                break
+    ckpt = os.path.join(CKPT_DIR, "stage1_last_latent.pt")
     print(f"Loading Coconut: {ckpt}")
     coconut.load_state_dict(torch.load(ckpt, map_location=DEVICE))
 
@@ -378,15 +391,15 @@ def main():
 
     all_results = {}
 
-    # 1. Coconut accuracy
-    all_results["coconut_test"] = evaluate_coconut_accuracy(
-        coconut, test_data, tokenizer, "test", max_samples=1000
+    # 1. Coconut accuracy (Stage 1: 1 latent step)
+    all_results["coconut_test_stage1"] = evaluate_coconut_accuracy(
+        coconut, test_data, tokenizer, "test_stage1", num_latent_mode=1, max_samples=500
     )
 
-    # OOD (5-digit)
+    # OOD (5-digit, Stage 1)
     ood_data = torch.load(os.path.join(DATA_DIR, "ood.pt"), weights_only=False)
-    all_results["coconut_ood"] = evaluate_coconut_accuracy(
-        coconut, ood_data, tokenizer, "ood_5digit", max_samples=500
+    all_results["coconut_ood_stage1"] = evaluate_coconut_accuracy(
+        coconut, ood_data, tokenizer, "ood_5digit_stage1", num_latent_mode=1, max_samples=200
     )
 
     # 2. AO evaluation
@@ -420,13 +433,13 @@ def main():
     print(f"\n{'Metric':<40} {'Value':>10}")
     print("-" * 55)
 
-    ctest = all_results["coconut_test"]
-    print(f"{'Coconut test accuracy':<40} {ctest['overall']:>10.4f}")
+    ctest = all_results.get("coconut_test_stage1", {})
+    print(f"{'Coconut test accuracy (Stage 1)':<40} {ctest.get('overall', 0):>10.4f}")
     for ns, acc in sorted(ctest.get("by_steps", {}).items()):
         print(f"{'  ' + str(ns) + '-step problems':<40} {acc:>10.4f}")
 
-    cood = all_results["coconut_ood"]
-    print(f"{'Coconut OOD (5-digit) accuracy':<40} {cood['overall']:>10.4f}")
+    cood = all_results.get("coconut_ood_stage1", {})
+    print(f"{'Coconut OOD (5-digit, Stage 1)':<40} {cood.get('overall', 0):>10.4f}")
 
     if isinstance(all_results["ao_test"], dict):
         ao = all_results["ao_test"]

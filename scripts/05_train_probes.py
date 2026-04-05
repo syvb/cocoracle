@@ -59,16 +59,16 @@ def prepare_probe_data(activation_data, tokenizer):
     answer_data = []
 
     for item in activation_data:
-        cot_steps = item["cot_steps"]
-        num_steps = item["num_steps"]
+        cot_steps = item.get("latent_cot_steps", item["cot_steps"])
+        num_latent = item.get("num_latent", item["num_steps"])
         answer = item["answer"]
         layer_hiddens = item["layer_hiddens"]
 
-        if not layer_hiddens or num_steps == 0:
+        if not layer_hiddens or num_latent == 0:
             continue
 
         # Per-step data
-        for step_idx in range(num_steps):
+        for step_idx in range(min(num_latent, len(layer_hiddens), len(cot_steps))):
             if SOURCE_LAYER not in layer_hiddens[step_idx]:
                 continue
             vec = layer_hiddens[step_idx][SOURCE_LAYER]
@@ -77,7 +77,7 @@ def prepare_probe_data(activation_data, tokenizer):
             step_data.append((vec, first_token, step_text, step_idx))
 
         # Answer data: use final thought hidden state
-        if SOURCE_LAYER in layer_hiddens[-1]:
+        if layer_hiddens and SOURCE_LAYER in layer_hiddens[-1]:
             answer_data.append((layer_hiddens[-1][SOURCE_LAYER], answer))
 
     return step_data, answer_data

@@ -19,8 +19,8 @@ DATA_DIR = "data"
 CKPT_DIR = "checkpoints"
 
 # Hyperparameters
-BATCH_SIZE = 16
-GRAD_ACCUM = 4
+BATCH_SIZE = 32
+GRAD_ACCUM = 2
 LR = 1e-5
 EPOCHS = 3
 MAX_SEQ_LEN = 192
@@ -84,21 +84,25 @@ def make_ao_examples(activation_data, tokenizer):
     examples = []
 
     for item in activation_data:
-        cot_steps = item["cot_steps"]
-        num_steps = item["num_steps"]
+        cot_steps = item.get("latent_cot_steps", item["cot_steps"])  # ground truth for latent positions
+        num_latent = item.get("num_latent", item["num_steps"])
         problem = item["problem"]
         answer = item["answer"]
         layer_hiddens = item["layer_hiddens"]  # list of dicts {layer: (D,)}
 
         # Skip if we don't have hidden states
-        if not layer_hiddens or num_steps == 0:
+        if not layer_hiddens or num_latent == 0:
             continue
 
         for source_layer in SOURCE_LAYERS:
-            # Task 1a: Single-step CoT recovery (30% of data)
-            for step_idx in range(num_steps):
+            # Task 1a: Single-step CoT recovery
+            for step_idx in range(num_latent):
+                if step_idx >= len(layer_hiddens):
+                    break
                 if source_layer not in layer_hiddens[step_idx]:
                     continue
+                if step_idx >= len(cot_steps):
+                    break
                 vec = layer_hiddens[step_idx][source_layer]
                 q = random.choice(COT_QUESTIONS)
                 prompt = f"Layer {source_layer}: {ACT} {q}"
@@ -110,14 +114,14 @@ def make_ao_examples(activation_data, tokenizer):
                     "source_layer": source_layer,
                 })
 
-            # Task 1b: Multi-step CoT recovery (30% of data)
-            if num_steps > 1:
-                vecs = [layer_hiddens[s][source_layer] for s in range(num_steps) if source_layer in layer_hiddens[s]]
+            # Task 1b: Multi-step CoT recovery
+            if num_latent > 1:
+                vecs = [layer_hiddens[s][source_layer] for s in range(num_latent)
+                        if s < len(layer_hiddens) and source_layer in layer_hiddens[s]]
                 if vecs:
                     act_tokens = " ".join([ACT] * len(vecs))
                     q = random.choice(COT_MULTI_QUESTIONS)
                     prompt = f"Layer {source_layer}: {act_tokens} {q}"
-                    # Format all steps
                     target = " ".join(f"Step {i+1}: {step}." for i, step in enumerate(cot_steps))
                     examples.append({
                         "prompt_text": prompt,
@@ -126,8 +130,9 @@ def make_ao_examples(activation_data, tokenizer):
                         "source_layer": source_layer,
                     })
 
-            # Task 2: Answer prediction (20% of data)
-            vecs = [layer_hiddens[s][source_layer] for s in range(num_steps) if source_layer in layer_hiddens[s]]
+            # Task 2: Answer prediction
+            vecs = [layer_hiddens[s][source_layer] for s in range(num_latent)
+                    if s < len(layer_hiddens) and source_layer in layer_hiddens[s]]
             if vecs:
                 act_tokens = " ".join([ACT] * len(vecs))
                 q = random.choice(ANSWER_QUESTIONS)
@@ -139,11 +144,11 @@ def make_ao_examples(activation_data, tokenizer):
                     "source_layer": source_layer,
                 })
 
-            # Task 3: Context prediction (20% of data)
-            vecs = [layer_hiddens[s][source_layer] for s in range(num_steps) if source_layer in layer_hiddens[s]]
+            # Task 3: Context prediction
+            vecs = [layer_hiddens[s][source_layer] for s in range(num_latent)
+                    if s < len(layer_hiddens) and source_layer in layer_hiddens[s]]
             if vecs:
                 act_tokens = " ".join([ACT] * len(vecs))
-                # Before context
                 q = random.choice(CONTEXT_BEFORE_QUESTIONS)
                 prompt = f"Layer {source_layer}: {act_tokens} {q}"
                 examples.append({
@@ -152,7 +157,6 @@ def make_ao_examples(activation_data, tokenizer):
                     "activation_vectors": vecs,
                     "source_layer": source_layer,
                 })
-                # After context
                 q = random.choice(CONTEXT_AFTER_QUESTIONS)
                 prompt = f"Layer {source_layer}: {act_tokens} {q}"
                 examples.append({
@@ -205,6 +209,8 @@ def train_batch(model, batch, tokenizer):
             model.clear_injection()
 
         loss, _ = model(input_ids, labels=labels)
+        if not torch.isfinite(loss):
+            continue
         total_loss += loss
         count += 1
 
@@ -212,7 +218,7 @@ def train_batch(model, batch, tokenizer):
 
     if count > 0:
         return total_loss / count
-    return torch.tensor(0.0, device=model.device)
+    return torch.tensor(0.0, device=model.device, requires_grad=True)
 
 
 def main():
@@ -229,12 +235,10 @@ def main():
 
     # Subsample to manageable size
     random.seed(42)
-    if len(train_examples) > 200_000:
-        random.shuffle(train_examples)
-        train_examples = train_examples[:200_000]
-    if len(val_examples) > 10_000:
-        random.shuffle(val_examples)
-        val_examples = val_examples[:10_000]
+    random.shuffle(train_examples)
+    train_examples = train_examples[:50_000]
+    random.shuffle(val_examples)
+    val_examples = val_examples[:5_000]
 
     print(f"Training examples: {len(train_examples)}")
     print(f"Validation examples: {len(val_examples)}")
@@ -266,14 +270,27 @@ def main():
             batch = train_examples[batch_start:batch_start + BATCH_SIZE]
 
             loss = train_batch(oracle, batch, tokenizer)
+            if not torch.isfinite(loss) or loss.item() == 0:
+                optimizer.zero_grad()
+                n_batches += 1
+                continue
             loss = loss / GRAD_ACCUM
             loss.backward()
 
             if (n_batches + 1) % GRAD_ACCUM == 0:
-                torch.nn.utils.clip_grad_norm_(oracle.trainable_params(), GRAD_CLIP)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
+                # Check for NaN gradients
+                has_nan = False
+                for p in oracle.trainable_params():
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        has_nan = True
+                        break
+                if has_nan:
+                    optimizer.zero_grad()
+                else:
+                    torch.nn.utils.clip_grad_norm_(oracle.trainable_params(), GRAD_CLIP)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
             epoch_loss += loss.item() * GRAD_ACCUM
             n_batches += 1

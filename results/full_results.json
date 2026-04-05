@@ -1,0 +1,375 @@
+{
+  "coconut_test_stage1": {
+    "overall": 0.248,
+    "by_steps": {
+      "5": 0.43333333333333335,
+      "3": 0.09659090909090909,
+      "4": 0.37362637362637363,
+      "2": 0.0
+    }
+  },
+  "coconut_ood_stage1": {
+    "overall": 0.0,
+    "by_steps": {
+      "6": 0.0,
+      "5": 0.0
+    }
+  },
+  "ao_test": {
+    "cot_exact_match": 0.0,
+    "cot_token_f1": 0.2636488095238119,
+    "cot_bleu": 0.12217287288325872,
+    "answer_exact_match": 0.0,
+    "context_bleu": 0.058342300346834845,
+    "by_layer": {
+      "3": 0.0,
+      "6": 0.0,
+      "9": 0.0
+    },
+    "by_step": {
+      "0": 0.0
+    }
+  },
+  "random_baseline_acc": 0.0,
+  "probes": {
+    "first_token_acc": 1.0,
+    "step_identity_acc": 1.0,
+    "answer_digit_exact_match": 0.4190000295639038
+  },
+  "qualitative_examples": [
+    {
+      "problem": "734 + 217 =",
+      "gold_answer": "951",
+      "pred_answer": "951",
+      "correct": true,
+      "text_cot": [
+        "4+7=11 write 1 carry 1",
+        "3+1+1=5 write 5"
+      ],
+      "latent_cot_gold": [
+        "7+2=9 write 9"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "21 + 46 =",
+      "gold_answer": "67",
+      "pred_answer": "477",
+      "correct": false,
+      "text_cot": [
+        "1+6=7 write 7"
+      ],
+      "latent_cot_gold": [
+        "2+4=6 write 6"
+      ],
+      "ao_interpretations": [
+        "+4=8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 + 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write"
+      ]
+    },
+    {
+      "problem": "814 + 259 =",
+      "gold_answer": "1073",
+      "pred_answer": "10733",
+      "correct": false,
+      "text_cot": [
+        "4+9=13 write 3 carry 1",
+        "1+5+1=7 write 7",
+        "8+2=10 write 0 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "7746 + 7237 =",
+      "gold_answer": "14983",
+      "pred_answer": "14983",
+      "correct": true,
+      "text_cot": [
+        "6+7=13 write 3 carry 1",
+        "4+3+1=8 write 8",
+        "7+2=9 write 9",
+        "7+7=14 write 4 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "38 + 63 =",
+      "gold_answer": "101",
+      "pred_answer": "1011",
+      "correct": false,
+      "text_cot": [
+        "8+3=11 write 1 carry 1",
+        "3+6+1=10 write 0 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "8565 + 9594 =",
+      "gold_answer": "18159",
+      "pred_answer": "18159595959",
+      "correct": false,
+      "text_cot": [
+        "5+4=9 write 9",
+        "6+9=15 write 5 carry 1",
+        "5+5+1=11 write 1 carry 1",
+        "8+9+1=18 write 8 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "4145 + 9508 =",
+      "gold_answer": "13653",
+      "pred_answer": "136533",
+      "correct": false,
+      "text_cot": [
+        "5+8=13 write 3 carry 1",
+        "4+0+1=5 write 5",
+        "1+5=6 write 6",
+        "4+9=13 write 3 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "218 + 755 =",
+      "gold_answer": "973",
+      "pred_answer": "973",
+      "correct": true,
+      "text_cot": [
+        "8+5=13 write 3 carry 1",
+        "1+5+1=7 write 7"
+      ],
+      "latent_cot_gold": [
+        "2+7=9 write 9"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "902 + 159 =",
+      "gold_answer": "1061",
+      "pred_answer": "10611",
+      "correct": false,
+      "text_cot": [
+        "2+9=11 write 1 carry 1",
+        "0+5+1=6 write 6",
+        "9+1=10 write 0 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "8971 + 8212 =",
+      "gold_answer": "17183",
+      "pred_answer": "171833",
+      "correct": false,
+      "text_cot": [
+        "1+2=3 write 3",
+        "7+1=8 write 8",
+        "9+2=11 write 1 carry 1",
+        "8+8+1=17 write 7 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "24 + 46 =",
+      "gold_answer": "70",
+      "pred_answer": "800",
+      "correct": false,
+      "text_cot": [
+        "4+6=10 write 0 carry 1"
+      ],
+      "latent_cot_gold": [
+        "2+4+1=7 write 7"
+      ],
+      "ao_interpretations": [
+        "+5=8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 + 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write 8 write"
+      ]
+    },
+    {
+      "problem": "476 + 787 =",
+      "gold_answer": "1263",
+      "pred_answer": "1263",
+      "correct": true,
+      "text_cot": [
+        "6+7=13 write 3 carry 1",
+        "7+8+1=16 write 6 carry 1",
+        "4+7+1=12 write 2 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "710 + 748 =",
+      "gold_answer": "1458",
+      "pred_answer": "14588",
+      "correct": false,
+      "text_cot": [
+        "0+8=8 write 8",
+        "1+4=5 write 5",
+        "7+7=14 write 4 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "493 + 218 =",
+      "gold_answer": "711",
+      "pred_answer": "9111",
+      "correct": false,
+      "text_cot": [
+        "3+8=11 write 1 carry 1",
+        "9+1+1=11 write 1 carry 1"
+      ],
+      "latent_cot_gold": [
+        "4+2+1=7 write 7"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "830 + 793 =",
+      "gold_answer": "1623",
+      "pred_answer": "1623",
+      "correct": true,
+      "text_cot": [
+        "0+3=3 write 3",
+        "3+9=12 write 2 carry 1",
+        "8+7+1=16 write 6 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "41 + 10 =",
+      "gold_answer": "51",
+      "pred_answer": "411",
+      "correct": false,
+      "text_cot": [
+        "1+0=1 write 1"
+      ],
+      "latent_cot_gold": [
+        "4+1=5 write 5"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "9807 + 1803 =",
+      "gold_answer": "11610",
+      "pred_answer": "1161010",
+      "correct": false,
+      "text_cot": [
+        "7+3=10 write 0 carry 1",
+        "0+0+1=1 write 1",
+        "8+8=16 write 6 carry 1",
+        "9+1+1=11 write 1 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "86 + 40 =",
+      "gold_answer": "126",
+      "pred_answer": "1266",
+      "correct": false,
+      "text_cot": [
+        "6+0=6 write 6",
+        "8+4=12 write 2 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "842 + 886 =",
+      "gold_answer": "1728",
+      "pred_answer": "1728",
+      "correct": true,
+      "text_cot": [
+        "2+6=8 write 8",
+        "4+8=12 write 2 carry 1",
+        "8+8+1=17 write 7 carry 1"
+      ],
+      "latent_cot_gold": [
+        "carry 1 write 1"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    },
+    {
+      "problem": "3608 + 4401 =",
+      "gold_answer": "8009",
+      "pred_answer": "3609",
+      "correct": false,
+      "text_cot": [
+        "8+1=9 write 9",
+        "0+0=0 write 0",
+        "6+4=10 write 0 carry 1"
+      ],
+      "latent_cot_gold": [
+        "3+4+1=8 write 8"
+      ],
+      "ao_interpretations": [
+        "1+4=6 write 6 write 6 write 6 write 6 write 6 write 6 write 6 + 7 write 6 write 6 write 6 = 7 write 6 write 6 = 7 write 6 write 6 write 6 write 6 write 6 write 6"
+      ]
+    }
+  ]
+}

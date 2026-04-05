@@ -9,21 +9,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from transformers import GPT2LMHeadModel
+from transformers.pytorch_utils import Conv1D
 from src.data_gen import ACT
 
 
-class LoRALinear(nn.Module):
-    """LoRA adapter for a linear layer."""
+class LoRAConv1D(nn.Module):
+    """LoRA adapter for HuggingFace Conv1D (used in GPT-2).
 
-    def __init__(self, original: nn.Linear, rank=32, alpha=64, dropout=0.05):
+    Conv1D computes y = xW + b where W is (in_feat, out_feat).
+    LoRA adds: y += x @ A @ B * scaling
+    """
+
+    def __init__(self, original: Conv1D, rank=32, alpha=64, dropout=0.05):
         super().__init__()
         self.original = original
         self.rank = rank
         self.alpha = alpha
         self.scaling = alpha / rank
 
-        in_feat = original.in_features
-        out_feat = original.out_features
+        # Conv1D weight shape is (in_feat, out_feat)
+        in_feat = original.weight.shape[0]
+        out_feat = original.weight.shape[1]
         self.lora_A = nn.Parameter(torch.randn(in_feat, rank) * (1.0 / math.sqrt(rank)))
         self.lora_B = nn.Parameter(torch.zeros(rank, out_feat))
         self.dropout = nn.Dropout(dropout)
@@ -34,24 +40,24 @@ class LoRALinear(nn.Module):
             self.original.bias.requires_grad_(False)
 
     def forward(self, x):
+        # Conv1D forward: x @ weight + bias
         base_out = self.original(x)
         lora_out = self.dropout(x) @ self.lora_A @ self.lora_B * self.scaling
         return base_out + lora_out
 
 
 def apply_lora(model, rank=32, alpha=64, dropout=0.05):
-    """Apply LoRA to all linear layers in the transformer blocks."""
+    """Apply LoRA to all Conv1D layers in the transformer blocks."""
     lora_params = []
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Linear) and "transformer.h" in name:
-            # Get parent module and attribute name
+    for name, module in list(model.named_modules()):
+        if isinstance(module, Conv1D) and "transformer.h" in name:
             parts = name.split(".")
             parent = model
             for p in parts[:-1]:
                 parent = getattr(parent, p)
             attr = parts[-1]
 
-            lora = LoRALinear(module, rank, alpha, dropout)
+            lora = LoRAConv1D(module, rank, alpha, dropout)
             setattr(parent, attr, lora)
             lora_params.extend([lora.lora_A, lora.lora_B])
 
@@ -77,14 +83,14 @@ class ActivationOracle(nn.Module):
         # Apply LoRA
         self.lora_params = apply_lora(self.model, lora_rank, lora_alpha)
 
-        # Freeze all non-LoRA params
-        for name, param in self.model.named_parameters():
-            if param not in self.lora_params:
-                param.requires_grad_(False)
+        # Freeze all params, then unfreeze LoRA
+        for param in self.model.parameters():
+            param.requires_grad_(False)
 
-        # Re-enable LoRA params
-        for p in self.lora_params:
-            p.requires_grad_(True)
+        lora_ids = {id(p) for p in self.lora_params}
+        for param in self.model.parameters():
+            if id(param) in lora_ids:
+                param.requires_grad_(True)
 
         # Injection state (set before forward pass)
         self._injection_vectors = None  # (K, D) activation vectors to inject
@@ -102,10 +108,20 @@ class ActivationOracle(nn.Module):
 
         # output is a tuple: (hidden_states, ...) or (hidden_states, presents, ...)
         hidden_states = output[0]  # (B, L, D)
+        seq_len = hidden_states.size(1)
 
-        for i, pos in enumerate(self._injection_positions):
-            if i >= len(self._injection_vectors):
-                break
+        # Only inject if positions are within the current sequence length
+        # (during generation with KV-cache, seq_len=1 for autoregressive steps)
+        positions_in_range = [
+            (i, pos) for i, pos in enumerate(self._injection_positions)
+            if pos < seq_len and i < len(self._injection_vectors)
+        ]
+
+        if not positions_in_range:
+            return output
+
+        hidden_states = hidden_states.clone()
+        for i, pos in positions_in_range:
             h_i = hidden_states[:, pos, :]  # (B, D)
             v_i = self._injection_vectors[i].to(h_i.device)  # (D,)
 
