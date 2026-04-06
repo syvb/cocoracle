@@ -1,0 +1,6 @@
+{
+  "cot_exact_match": 0.0,
+  "cot_token_f1": 0.2563974025974042,
+  "answer_exact_match": 0.002,
+  "random_cot_exact": 0.005
+}
