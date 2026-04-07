@@ -1,5 +1,7 @@
 # Cocoracle
 
+[![Models on HuggingFace](https://img.shields.io/badge/Models-HuggingFace-yellow)](https://huggingface.co/syvb/cocoracle)
+
 **Can we interpret what a model is "thinking" during latent reasoning?**
 
 This project combines two ideas:
@@ -130,9 +132,9 @@ python scripts/10_gpt2large_alllatent.py
 
 Requires a GPU with >= 16GB VRAM. Tested on NVIDIA RTX 4090 (24GB).
 
-## Models
+## Pre-trained Models
 
-Pre-trained checkpoints are available on HuggingFace: [syvb/cocoracle](https://huggingface.co/syvb/cocoracle)
+Checkpoints are available on HuggingFace: **[syvb/cocoracle](https://huggingface.co/syvb/cocoracle)**
 
 - `stage3_alllatent.pt` — GPT-2-large Coconut model, all-latent (45% accuracy)
 - `self_oracle_alllatent.pt` — GPT-2-large self-oracle (6.9% CoT exact match)
