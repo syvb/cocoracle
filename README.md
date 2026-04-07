@@ -6,40 +6,48 @@ This project combines two ideas:
 - [**Coconut**](https://arxiv.org/abs/2412.06769) (Chain of Continuous Thought): LLMs that reason in latent space instead of generating text chain-of-thought tokens
 - [**Activation Oracles**](https://arxiv.org/abs/2512.15674) (AOs): Models trained to answer natural-language questions about another model's internal activations
 
-We train a Coconut model (GPT-2, 124M params) that does arithmetic with latent reasoning steps, then try to build an oracle that can look at those hidden reasoning states and tell us what the model is computing.
+We train Coconut models on GPT-2 that perform arithmetic with latent reasoning steps, then build a "self-oracle" — the same model fine-tuned to answer questions about its own hidden states — to interpret what the latent thoughts encode.
 
 ## Key Results
 
-### The information is there
+### Coconut model: latent reasoning works at scale
 
-Linear probes on the latent thought hidden states achieve:
+GPT-2-large (774M) learns to reason in latent space far better than GPT-2-small (124M):
+
+| Stage | Description | GPT-2-small | GPT-2-large |
+|-------|------------|-------------|-------------|
+| 0 | Full text CoT | trained | trained |
+| 1 | Last step latent | 69% | **99%** |
+| 2 | Last 2 steps latent | 19% | **71%** |
+| 3 | All steps latent | 2.4% | **45%** |
+
+### Self-oracle: reading latent thoughts
+
+The self-oracle approach — fine-tuning the Coconut model to interpret its own activations — achieves the first non-zero exact match on recovering chain-of-thought text from latent hidden states:
+
+| Configuration | CoT Exact Match | CoT Token F1 | AO Val Loss |
+|--------------|----------------|--------------|-------------|
+| Separate AO (GPT-2-small + LoRA) | 0% | 26.4% | 2.92 |
+| Self-oracle, GPT-2-small, stage 1 | 0% | 32.5% | 1.98 |
+| Self-oracle, GPT-2-large, stage 1 | 0% | 25.6% | 1.10 |
+| **Self-oracle, GPT-2-large, all-latent** | **6.9%** | **34.2%** | **0.55** |
+
+The all-latent GPT-2-large self-oracle correctly recovers exact CoT strings like `"2+8=10 write 0 carry 1"` and `"4+4=8 write 8"` from latent hidden states alone 6.9% of the time, with 34% token-level F1. The random baseline is 0%, confirming the model reads real signal from the injected activations.
+
+### Linear probes confirm the information exists
+
+Linear probes on the latent thought hidden states (GPT-2-small, layer 6) achieve:
 - **100%** accuracy classifying which arithmetic step the model is on
 - **100%** accuracy predicting the first token of the reasoning step
 - **42%** exact match on predicting the full answer
 
-This proves the Coconut model's latent states encode rich, structured information about the computation being performed.
-
-### Natural-language interpretation is hard at small scale
-
-We tried three approaches to produce natural-language descriptions of latent states:
-
-| Approach | CoT Token F1 | AO Val Loss | Notes |
-|----------|-------------|-------------|-------|
-| Separate AO (GPT-2 + LoRA) | 26.4% | 2.92 | Mode collapse: same output for every input |
-| Self-oracle v1 (same model, layer 1) | 32.5% | 1.98 | Varied outputs, no collapse, no forgetting |
-| **Self-oracle v2 (layer 5, 2x signal)** | **22.3%** | **1.10** | Short CoT-formatted outputs, 17.7% correct token sets |
-
-The self-oracle v2 has the lowest loss and generates structured arithmetic text conditioned on the input activation, but exact match remains ~0% at GPT-2-small scale. The model gets the right *type* of step (carry vs addition) and often the right *tokens* (17.7% token-set match for carry steps), but can't reliably decode specific digits.
-
-### Why the gap?
-
-The AO paper's smallest successful model is 8B parameters. At 124M, GPT-2-small can learn to *read* the injection signal (proven by the low loss and structured outputs), but doesn't have enough capacity to precisely *decode* a 768-dimensional activation vector into the exact correct CoT text through 6 layers of processing.
+The information is there and linearly separable. The challenge is in the generation pipeline.
 
 ## How It Works
 
 ### 1. Coconut Model
 
-GPT-2-small fine-tuned with a 4-stage curriculum on multi-digit addition:
+GPT-2 fine-tuned with a multi-stage curriculum on multi-digit addition:
 
 ```
 Problem: 347 + 285 =
@@ -47,45 +55,58 @@ CoT: 7+5=12 write 2 carry 1 | 4+8+1=13 write 3 carry 1 | 3+2+1=6 write 6
 Answer: 632
 ```
 
-Stage 0 trains with full text CoT, then stages 1-3 progressively replace CoT steps with latent continuous thought vectors (hidden states fed back as inputs instead of decoded to text).
-
-**Important caveat:** Our Coconut model is not very good. Stage 1 (only the last step latent) achieves 69% teacher-forced accuracy, which is reasonable. But the model degrades sharply as more steps become latent: Stage 2 drops to 19%, and Stage 3 (full replacement, all steps latent) manages only 2.4%. This means the all-latent model barely works, and even Stage 1 is far from reliable. A proper Coconut implementation would need significantly more training, larger models, and the full curriculum from the original paper. Our AO results are therefore probing activations from a weak reasoner — a stronger Coconut model would likely produce richer, more interpretable latent states.
+Stage 0 trains with full text CoT. Stages 1-3 progressively replace CoT steps with latent continuous thought vectors — hidden states fed back as inputs instead of being decoded to text. At the "all-latent" stage, the model sees only the problem, performs all reasoning internally through a sequence of hidden state vectors, then produces the answer.
 
 ### 2. Activation Collection
 
-From the trained Coconut model, we extract hidden states at each latent thought position from layers 3, 6, and 9 (25/50/75% depth). Each hidden state is paired with the ground-truth CoT text it replaced.
+From the trained Coconut model, we extract hidden states at each latent thought position from the 50% depth layer (layer 6 for GPT-2-small, layer 18 for GPT-2-large). Each hidden state is paired with the ground-truth CoT text it replaced.
 
 ### 3. Self-Oracle
 
-The Coconut model itself is fine-tuned to also answer questions about its own activations:
+The Coconut model itself is fine-tuned to answer questions about its own activations:
 
 ```
-Input:  "Layer 6: <act> What is the intermediate calculation at this reasoning step?"
-        (with Coconut's layer-6 hidden state injected at <act> via norm-matched addition)
-Target: "7+5=12 write 2 carry 1"
+Input:  "Layer 18: <act> What is the intermediate calculation at this reasoning step?"
+        (with Coconut's layer-18 hidden state injected at <act> via norm-matched addition)
+Target: "7+5=12 write 2 carry 1<|endoftext|>"
 ```
 
-Training mixes 70% AO tasks with 30% original CoT data to prevent catastrophic forgetting. The injection happens at layer 5 (one before the extraction layer) with 2x signal scaling.
+Key design choices:
+- **Self-interpretation**: Using the same model (not a separate oracle) since it already understands arithmetic and its own internal representations
+- **Layer-matched injection**: Injecting at layer N-1 where activations were extracted from layer N, keeping the signal in the same representational space
+- **2x injection scaling**: Doubling the norm-matched signal strength to make the activation more visible to subsequent layers
+- **Mixed training**: 70% AO tasks + 30% original text CoT to prevent catastrophic forgetting
+- **EOS tokens**: Training targets end with `<|endoftext|>` so the model learns when to stop
+
+### What made the breakthrough
+
+The jump from 0% to 6.9% exact match came from three factors combining:
+
+1. **GPT-2-large (774M)** produces a much better Coconut model (45% all-latent accuracy vs 2.4%), creating richer latent representations
+2. **All-latent mode** gives the AO multiple thought-step activations per problem instead of just one, providing more training signal
+3. **Self-oracle approach** leverages the model's existing knowledge of arithmetic and its own internal representations
 
 ## Project Structure
 
 ```
 src/
   data_gen.py          # Synthetic arithmetic dataset with carry-propagation CoT
-  coconut_model.py     # GPT-2 with continuous thought (latent reasoning) support
+  coconut_model.py     # GPT-2-small with continuous thought support
   activation_oracle.py # Separate-model AO with LoRA (baseline)
   self_oracle.py       # Self-oracle: Coconut model interprets its own activations
 
 scripts/
-  01_generate_data.py       # Generate 100K addition problems with CoT
-  02_train_coconut.py       # 4-stage curriculum training
-  03_collect_activations.py # Extract hidden states from latent thought positions
-  04_train_oracle.py        # Train separate AO (baseline)
-  05_train_probes.py        # Train linear probe baselines
-  06_evaluate.py            # Full evaluation suite
-  07_train_self_oracle.py   # Train self-oracle (best approach)
-  08_eval_self_oracle.py    # Evaluate self-oracle
-  run_all.sh                # End-to-end pipeline (scripts 01-06)
+  01_generate_data.py          # Generate 100K addition problems with CoT
+  02_train_coconut.py          # 4-stage curriculum (GPT-2-small)
+  03_collect_activations.py    # Extract hidden states from latent thought positions
+  04_train_oracle.py           # Train separate AO (baseline)
+  05_train_probes.py           # Train linear probe baselines
+  06_evaluate.py               # Full evaluation suite
+  07_train_self_oracle.py      # Train self-oracle (GPT-2-small)
+  08_eval_self_oracle.py       # Evaluate self-oracle
+  09_gpt2large_experiment.py   # GPT-2-large, stage 1 only
+  10_gpt2large_alllatent.py    # GPT-2-large, all stages through all-latent (best results)
+  run_all.sh                   # End-to-end pipeline (scripts 01-06)
 ```
 
 ## Reproduction
@@ -93,24 +114,36 @@ scripts/
 ```bash
 pip install -r requirements.txt
 
-# Base experiment: Coconut + separate AO + probes (~3 hours on RTX 4090)
+# GPT-2-small base experiment (~3 hours on RTX 4090)
 bash scripts/run_all.sh
 
-# Self-oracle experiment (~1.5 hours additional)
+# GPT-2-small self-oracle (~1.5 hours)
 python scripts/07_train_self_oracle.py
 python scripts/08_eval_self_oracle.py
+
+# GPT-2-large stage 1 (~8 hours)
+python scripts/09_gpt2large_experiment.py
+
+# GPT-2-large all-latent — best results (~16 hours)
+python scripts/10_gpt2large_alllatent.py
 ```
 
 Requires a GPU with >= 16GB VRAM. Tested on NVIDIA RTX 4090 (24GB).
 
-## What Would Make This Work
+## Models
 
-The experiment demonstrates the concept is viable but needs more scale:
+Pre-trained checkpoints are available on HuggingFace: [syvb/cocoracle](https://huggingface.co/syvb/cocoracle)
 
-1. **GPT-2-medium/large (355M-774M)**: Drop-in replacement, no code changes needed. 3-6x more capacity should cross the threshold for precise digit decoding.
-2. **Longer training**: AO loss was still decreasing at epoch 5. 20-50 epochs would help.
-3. **Larger Coconut model**: Our all-latent stage only gets 2.4% accuracy. A properly trained Coconut model (more data, larger model) would produce richer latent representations.
-4. **At 8B+ scale**: The AO paper shows this works. A Qwen-8B or Llama-8B Coconut model with self-oracle training should produce human-readable descriptions of latent reasoning steps.
+- `stage3_alllatent.pt` — GPT-2-large Coconut model, all-latent (45% accuracy)
+- `self_oracle_alllatent.pt` — GPT-2-large self-oracle (6.9% CoT exact match)
+
+## What Would Improve This Further
+
+1. **More training**: AO loss was still decreasing at epoch 5 (0.55 and dropping). Training for 20+ epochs would likely push exact match higher.
+2. **Larger models**: The AO paper succeeds at 8B+ scale. A Qwen-8B or Llama-8B Coconut model with self-oracle training should produce much better results.
+3. **Better Coconut training**: Our all-latent model only achieves 45% accuracy. The original Coconut paper uses more data and longer training. A 90%+ all-latent model would produce much richer latent states.
+4. **Multi-layer injection**: Currently we inject at a single layer. Injecting the same activation at multiple layers could strengthen the signal.
+5. **Diverse training tasks**: The AO paper uses classification, context prediction, and system prompt QA. We only use arithmetic. More diverse tasks could improve generalization.
 
 ## References
 
