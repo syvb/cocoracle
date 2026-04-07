@@ -1,0 +1,7 @@
+{
+  "cot_exact_match": 0.06916830019602352,
+  "cot_token_f1": 0.3422043574521861,
+  "answer_exact_match": 0.003,
+  "random_cot_exact": 0.0,
+  "cot_total_steps_evaluated": 3571
+}
